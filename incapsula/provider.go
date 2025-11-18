@@ -216,17 +216,35 @@ func getLLMSuggestions(d *schema.ResourceData) diag.Diagnostics {
 	allResourcesFromFiles, _ := getAllResourcesFromTfFiles(dir)
 	log.Printf("Resource from file: %s\n", allResourcesFromFiles)
 	docs, _ := readAndConcatWebsiteFiles("website")
-	return runDiagnostics(d, resources, docs, allResourcesFromFiles)
-	//return runDiagnosticsParallel(d, resources, docs, allResourcesFromFiles)
+	rowAnswer := runDiagnostics(d, resources, docs, allResourcesFromFiles)
+	//rowAnswer := runDiagnosticsParallel(d, resources, docs, allResourcesFromFiles)
+	//return createHtmlReport(d, rowAnswer)
+	return createResponse(d, rowAnswer)
 }
 
-func runDiagnostics(d *schema.ResourceData, resources []TfResource, docs string, allResourcesFromFiles string) diag.Diagnostics {
+func createResponse(d *schema.ResourceData, answer string) diag.Diagnostics {
 	var diags diag.Diagnostics
+	diags = append(diags, diag.Diagnostic{
+		Severity: diag.Warning,
+		Summary:  "Best Practice Suggestion",
+		Detail:   answer,
+	})
+	print(answer)
+	return diags
+}
+
+func runDiagnostics(d *schema.ResourceData, resources []TfResource, docs string, allResourcesFromFiles string) string {
 	answer := ""
-	answer += getMissingResources(d, resources)
-	//answer += getGeneralTFBestPractices(allResourcesFromFiles)
-	//answer += getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles, docs)
-	answer += getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, docs)
+	answer = answer + "\n" + getMissingResources(d, resources)
+	answer = answer + "\n" + getGeneralTFBestPractices(allResourcesFromFiles)
+	//answer = answer + "\n" +  getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles, docs)
+	answer = answer + "\n" + getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, docs)
+	return answer
+}
+
+func createHtmlReport(d *schema.ResourceData, finalAnswer string) diag.Diagnostics {
+	var diags diag.Diagnostics
+	answer := escapeBraces(finalAnswer)
 	htmlFile := getHtmlContent(d, answer)
 	link := saveHtmlToFile(d, htmlFile)
 	answerWithImage := getAiAnswer(link)
@@ -237,6 +255,12 @@ func runDiagnostics(d *schema.ResourceData, resources []TfResource, docs string,
 	})
 	print(htmlFile)
 	return diags
+}
+
+func escapeBraces(answer string) string {
+	answer = strings.ReplaceAll(answer, "{", "{{")
+	answer = strings.ReplaceAll(answer, "}", "}}")
+	return answer
 }
 
 func saveHtmlToFile(d *schema.ResourceData, content string) string {
@@ -318,6 +342,8 @@ Any process, timeline, or hierarchy that can be visualized
 Summarize in clear, concise text (no huge paragraphs).
 
 All code snippets MUST be included in the recomendations.
+
+include BOTH original snippets and improved snippets. (if exists)
 
 HTML requirements:
 
