@@ -393,26 +393,27 @@ The current Terraform code is as follows:
 
 func getGeneralTFBestPractices(resources string, diags diag.Diagnostics) diag.Diagnostics {
 	question := fmt.Sprintf(`You are an expert Terraform engineer and cloud architect.
-Your task is to analyze the Terraform code I provide and suggest improvements strictly following Terraform and cloud best practices.
+Your task is to analyze the Terraform code I provide and suggest improvements strictly following Terraform best practices specified in the following link: https://www.terraform-best-practices.com/
 
 When I give you Terraform files, follow all instructions below:
 
 What You Must Do
 1. Identify Issues
+2. Provide Exact Replacement Snippets
 
 Find any problems, risks, or opportunities for improvement, including:
 
-  - Security issues (IAM, secrets handling, encryption, least privilege)
-  - Missing or weak variables, types, validation
-  - Resource naming inconsistencies
-  - Lack of version pinning
-  - Poor module structure or missing modules
-  - Inefficient or costly configurations
-  - Missing tags/labels
-  - Provider misconfigurations
-  - Deprecated resources or arguments
-  - Hard-coded values
-  - Anything that violates Terraform or cloud best practices
+  	- Security issues (IAM, secrets handling, encryption, least privilege)
+	- Deprecated resources or arguments
+	- Hard-coded values
+  	- Missing or weak variables, types, validation
+  	- Resource naming inconsistencies
+  	- Poor module structure or missing modules
+  	- Inefficient or costly configurations
+  	- Missing tags/labels
+	- Provider misconfigurations
+  	- Lack of version pinning
+  	- Anything that violates Terraform or cloud best practices
 
 2. Provide Exact Replacement Snippets
 
