@@ -216,10 +216,10 @@ func getLLMSuggestions(d *schema.ResourceData) diag.Diagnostics {
 	allResourcesFromFiles, _ := getAllResourcesFromTfFiles(dir)
 	log.Printf("Resource from file: %s\n", allResourcesFromFiles)
 	docs, _ := readAndConcatWebsiteFiles("website")
-	rowAnswer := runDiagnostics(d, resources, docs, allResourcesFromFiles)
-	//rowAnswer := runDiagnosticsParallel(d, resources, docs, allResourcesFromFiles)
-	//return createHtmlReport(d, rowAnswer)
-	return createResponse(d, rowAnswer)
+	//rowAnswer := runDiagnostics(d, resources, docs, allResourcesFromFiles)
+	rowAnswer := runDiagnosticsParallel(d, resources, docs, allResourcesFromFiles)
+	return createHtmlReport(d, rowAnswer)
+	//return createResponse(d, rowAnswer)
 }
 
 func createResponse(d *schema.ResourceData, answer string) diag.Diagnostics {
@@ -316,50 +316,30 @@ func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, docs
 func getHtmlContent(d *schema.ResourceData, finalAnswer string) string {
 	question := fmt.Sprintf(`
 You are a system that takes a final answer to the user question and turns that answer into a single, well-structured, visually organized HTML file.
-
 Overall behavior
-
 Transform that explanation into a self-contained HTML document that:
-
 Uses semantic structure (sections, headings, lists).
-
 Uses a simple but attractive layout (cards, columns, timelines, etc.).
-
 Includes inline CSS so it can be saved directly as index.html and opened in a browser.
-
 Output only the final HTML. Do not include any explanations, comments, or markdown.
-
 Content requirements
-
+The final answer is combined from several answers and can have duplications.
 Identify:
-
 Main idea / overview
-
 3–7 key points or components
-
 Any process, timeline, or hierarchy that can be visualized
-
-Summarize in clear, concise text (no huge paragraphs).
-
-All code snippets MUST be included in the recomendations.
-
-include BOTH original snippets and improved snippets. (if exists)
-
+Keep the full content without removing or summarizing anything; retain all original text, details, and elements in their entirety.
+All code snippets MUST be included in the recommendations.
+Include BOTH original snippets and improved snippets (if exists), presented in a before-after form.
 HTML requirements:
-
 Produce a complete HTML5 document:
-
 Use this structure (adapt as needed):
-
 <html>, <head>, <body> with:
-
 <meta charset="UTF-8">
-
 <title>: short title derived from the topic
-
 <style>: all CSS inline in the head (no external files)
 
-In <body>:
+In :
 
 A top header with:
 
@@ -378,6 +358,8 @@ At least one “graphic” layout:
 E.g. a timeline, process flow, comparison table, or step boxes
 
 These can be built using HTML + CSS (no JS required).
+
+Make the HTML interactive: each section (e.g., overview, key points, processes) must be collapsible/expandable using HTML details/summary elements or similar pure HTML/CSS techniques, allowing users to extend/collapse to view the full content, with code snippets displayed in a before-after format within the expanded views.
 
 Visual style guidelines:
 
@@ -405,7 +387,7 @@ Ensure good color contrast.
 
 Structure headings in order (h1, then h2, etc.).
 
-Use lists (<ul>, <ol>) instead of manually formatted bullets.
+Use lists (, ) instead of manually formatted bullets.
 
 No JavaScript is required unless it’s absolutely necessary for layout; prefer pure HTML + CSS.
 
@@ -417,7 +399,7 @@ Do not wrap it in code fences.
 
 Do not add any explanation or commentary.
 
-User request to base the HTML on: %s`, finalAnswer)
+final answer to base the HTML on: %s`, finalAnswer)
 
 	answer, _ := queryAgent(question)
 	return answer
@@ -768,18 +750,95 @@ func readAndConcatWebsiteFiles(root string) (string, error) {
 }
 
 func getMissingResources(d *schema.ResourceData, resources []TfResource) string {
-	//question := "Based on the giving resources, which comes in the following structure [{{resource name resource id}}]" +
-	//	" fetch all the sites from the backend and compare them with the given sites resources. " +
-	//	" check which resources are missing and output the missing resources only" +
-	//	" output should be in the following json format: " +
-	//	"[{{ \"resource_type\": \"<resource_type>\", \"resource_id\": \"<resource_id>\", \"site name\": \"<site_name>\" }}]" +
-	//	" given resources: " + fmt.Sprintf("%v", resources)
+	var wg sync.WaitGroup
+	results := make(chan string, 3)
 
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		results <- getMissingSites(d, resources)
+	}()
+	go func() {
+		defer wg.Done()
+		results <- getMissingRules(d, resources)
+	}()
+	go func() {
+		defer wg.Done()
+		results <- getMissingPolicies(d, resources)
+	}()
+
+	wg.Wait()
+	close(results)
+
+	var answers []string
+	for r := range results {
+		answers = append(answers, r)
+	}
+
+	question := "You are a precise configuration merger.\n\nYou will receive several text snippets. Each snippet has this exact structure:" +
+		" add these resources to your configuration\n<resources>\n...list of resources...\n</resources>\nrun this import commands\n<commands>\n...list of commands...\n</commands>" +
+		" Your task is to combine ALL of these snippets into ONE single output that follows the exact same structure, " +
+		"preserving the original order of both the <resources> blocks and the <commands> blocks." +
+		" Rules: 1. Keep the introductory lines exactly as:  add these resources to your configuration  <resources>" +
+		" 2. Inside <resources>...</resources>, output the content of every <resources> block from the inputs in the exact order the inputs appeared. Do NOT deduplicate, sort, or modify lines unless they are 100% identical." +
+		" 3. Then write:   run this import commands   <commands>" +
+		" 4. Inside <commands>...</commands>, output the content of every <commands> block from the inputs in the exact order the inputs appeared. Again, preserve order and do not deduplicate unless lines are identical." +
+		" 5. If a snippet is missing either the <resources> or <commands> section, simply skip that missing part. 6. Output nothing else—no explanations, no markdown, no extra text." +
+		" Now merge the following snippets:" +
+		" Sites differences:\n" + answers[0] + "\n" +
+		" Rules differences:\n" + answers[1] + "\n" +
+		" Policies differences:\n" + answers[2] + "\n" +
+		" Output only the combined answer with no additional words, explanations, or text."
+
+	answer, _ := queryAgent(question)
+	return answer
+}
+
+func getMissingPolicies(d *schema.ResourceData, resources []TfResource) string {
+	question := "Your task is to gather the full list of policies using the available MCP tool and compare it against the configuration provided in the user message." +
+		" Fetch all the account policies using the tool with a page size of 100." +
+		" After retrieving the remote policies, compare them to the policies defined in the provided configuration. " +
+		" Produce a JSON array containing only the differences between the two sets. " +
+		" Your output must contain only the following two sections, with no additional words, explanations, or text. " +
+		" replace the all the spaces in the every policy name in every place used with the tags <policy_name> with _:\n" +
+		" add these resources to your configuration:" +
+		" \nresource \"incapsula_policy\" \"<policy_name>\" {{ name = \"<policy_name>\" account_id = \"<account_id>\" description = \"<description>\" policy_type = \"<policy_type>\" enabled = \"<enabled>\" policy_settings = <<POLICY_EOF\n[<policy_settings>]POLICY_EOF\n  }}" +
+		" run this import commands \nterraform import incapsula_policy.<policy_name> <resource_id>" +
+		" Output only these blocks with no additional words, explanations, or text." +
+		" Only include sites that exist in one source but not the other." +
+		" If a tool call is required to obtain the data, call it." +
+		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
+
+	policiesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
+	return policiesAnswer
+}
+
+func getMissingRules(d *schema.ResourceData, resources []TfResource) string {
+	question := "Your task is to gather the full list of rules using the available MCP tool and compare it against the configuration provided in the user message." +
+		" Fetch all the account rules using the tool with a page size of 100." +
+		" After retrieving the remote rules, compare them to the rules defined in the provided configuration. " +
+		" Produce a JSON array containing only the differences between the two sets. " +
+		" Your output must contain only the following two sections, with no additional words, explanations, or text. " +
+		" replace the all the spaces in the every rule name in every place used with the tags <rule_name> with _:\n" +
+		" add these resources to your configuration:" +
+		" \nresource \"incapsula_incap_rule\" \"<rule_name>\" {{ name = \"<rule_name>\" site_id = \"<site_id>\" action = \"<action>\" filter = \"<filter>\" enabled = \"<enabled>\"  }}" +
+		" run this import commands \nterraform import incapsula_incap_rule.<rule_name> <resource_id>" +
+		" Output only these blocks with no additional words, explanations, or text." +
+		" Only include sites that exist in one source but not the other." +
+		" If a tool call is required to obtain the data, call it." +
+		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
+
+	rulesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
+	return rulesAnswer
+}
+
+func getMissingSites(d *schema.ResourceData, resources []TfResource) string {
 	question := "Your task is to gather the full list of sites using the available MCP tool and compare it against the configuration provided in the user message." +
 		" Fetch all sites using the tool with a page size of 100." +
 		" After retrieving the remote sites, compare them to the sites defined in the provided configuration. " +
 		" Produce a JSON array containing only the differences between the two sets. " +
 		" Your output must contain only the following two sections, with no additional words, explanations, or text:\n" +
+		" replace the all the spaces in the every site name in every place used with the tags <site_name> with _:\n" +
 		" add these resources to your configuration:\nresource \"incapsula_site_v3\" \"<site_name>\" {{ name = \"<site_name>\" }}" +
 		" run this import commands \nterraform import incapsula_site_v3.<site_name> <resource_id>" +
 		" Output only these blocks with no additional words, explanations, or text." +
@@ -788,22 +847,6 @@ func getMissingResources(d *schema.ResourceData, resources []TfResource) string 
 		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
 
 	sitesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
-
-	//question := "Your task is to gather the full list of rules using the available MCP tool and compare it against the configuration provided in the user message." +
-	//	" Fetch all the account rules using the tool with a page size of 100." +
-	//	" After retrieving the remote rules, compare them to the rules defined in the provided configuration. " +
-	//	" Produce a JSON array containing only the differences between the two sets. " +
-	//	" Your output must contain only the following two sections, with no additional words, explanations, or text. replace the all the spaces in the rule name with _:\n" +
-	//	" add these resources to your configuration:" +
-	//	" \nresource \"incapsula_incap_rule\" \"<rule_name>\" {{ name = \"<rule_name>\" site_id = \"<site_id>\" action = \"<action>\" filter = \"<filter>\" enabled = \"<enabled>\"  }}" +
-	//	" run this import commands \nterraform import incapsula_incap_rule.<rule_name> <resource_id>" +
-	//	" Output only these blocks with no additional words, explanations, or text." +
-	//	" Only include sites that exist in one source but not the other." +
-	//	" If a tool call is required to obtain the data, call it." +
-	//	" this is the provided configuration: " + fmt.Sprintf("%v", resources)
-	//
-	//rulesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
-
 	return sitesAnswer
 }
 
