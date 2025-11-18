@@ -15,6 +15,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type TfResource struct {
@@ -245,7 +246,7 @@ func runDiagnostics(d *schema.ResourceData, resources []TfResource, docs string,
 func createHtmlReport(d *schema.ResourceData, finalAnswer string) diag.Diagnostics {
 	var diags diag.Diagnostics
 	answer := escapeBraces(finalAnswer)
-	htmlFile := getHtmlContent(d, answer)
+	htmlFile := getHtmlContent(answer)
 	link := saveHtmlToFile(d, htmlFile)
 	answerWithImage := getAiAnswer(link)
 	diags = append(diags, diag.Diagnostic{
@@ -281,6 +282,7 @@ func saveHtmlToFile(d *schema.ResourceData, content string) string {
 }
 
 func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, docs string, allResourcesFromFiles string) string {
+
 	var wg sync.WaitGroup
 	results := make(chan string, 4)
 
@@ -313,10 +315,12 @@ func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, docs
 	return strings.Join(answers, "\n")
 }
 
-func getHtmlContent(d *schema.ResourceData, finalAnswer string) string {
+func getHtmlContent(finalAnswer string) string {
 	question := fmt.Sprintf(`
 You are a system that takes a final answer to the user question and turns that answer into a single, well-structured, visually organized HTML file.
 Overall behavior
+ADD the *FULL* content of the original answer to the html page, only remove duplications if exists. 
+If you have import instructions, include all of them in the HTML as well.
 Transform that explanation into a self-contained HTML document that:
 Uses semantic structure (sections, headings, lists).
 Uses a simple but attractive layout (cards, columns, timelines, etc.).
@@ -750,21 +754,36 @@ func readAndConcatWebsiteFiles(root string) (string, error) {
 }
 
 func getMissingResources(d *schema.ResourceData, resources []TfResource) string {
+
+	ctx := context.Background()
+	mcpSess, err := getMCPSession(ctx, d.Get("api_id").(string), d.Get("api_key").(string))
+
+	if err != nil {
+		log.Printf("Failed to create MCP session: %v", err)
+		return "Failed to create MCP session"
+	}
+	defer mcpSess.Close()
+	toolsDesc, err := getMCPToolsDescription(ctx, mcpSess)
+	if err != nil {
+		log.Printf("Failed to get MCP tools description: %v", err)
+		return "Failed to get MCP tools description"
+	}
+
 	var wg sync.WaitGroup
 	results := make(chan string, 3)
 
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		results <- getMissingSites(d, resources)
+		results <- getMissingSites(resources, mcpSess, toolsDesc)
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getMissingRules(d, resources)
+		results <- getMissingRules(resources, mcpSess, toolsDesc)
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getMissingPolicies(d, resources)
+		results <- getMissingPolicies(resources, mcpSess, toolsDesc)
 	}()
 
 	wg.Wait()
@@ -791,10 +810,10 @@ func getMissingResources(d *schema.ResourceData, resources []TfResource) string 
 		" Output only the combined answer with no additional words, explanations, or text."
 
 	answer, _ := queryAgent(question)
-	return answer
+	return "Issue — missing resources\nexecute the following commands to import the missing resources\n" + answer
 }
 
-func getMissingPolicies(d *schema.ResourceData, resources []TfResource) string {
+func getMissingPolicies(resources []TfResource, sess *mcp.ClientSession, toolDesc string) string {
 	question := "Your task is to gather the full list of policies using the available MCP tool and compare it against the configuration provided in the user message." +
 		" Fetch all the account policies using the tool with a page size of 100." +
 		" After retrieving the remote policies, compare them to the policies defined in the provided configuration. " +
@@ -809,11 +828,11 @@ func getMissingPolicies(d *schema.ResourceData, resources []TfResource) string {
 		" If a tool call is required to obtain the data, call it." +
 		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
 
-	policiesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
+	policiesAnswer, _ := answerWithTools(toolDesc, question, sess)
 	return policiesAnswer
 }
 
-func getMissingRules(d *schema.ResourceData, resources []TfResource) string {
+func getMissingRules(resources []TfResource, sess *mcp.ClientSession, toolDesc string) string {
 	question := "Your task is to gather the full list of rules using the available MCP tool and compare it against the configuration provided in the user message." +
 		" Fetch all the account rules using the tool with a page size of 100." +
 		" After retrieving the remote rules, compare them to the rules defined in the provided configuration. " +
@@ -828,11 +847,11 @@ func getMissingRules(d *schema.ResourceData, resources []TfResource) string {
 		" If a tool call is required to obtain the data, call it." +
 		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
 
-	rulesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
+	rulesAnswer, _ := answerWithTools(toolDesc, question, sess)
 	return rulesAnswer
 }
 
-func getMissingSites(d *schema.ResourceData, resources []TfResource) string {
+func getMissingSites(resources []TfResource, sess *mcp.ClientSession, toolDesc string) string {
 	question := "Your task is to gather the full list of sites using the available MCP tool and compare it against the configuration provided in the user message." +
 		" Fetch all sites using the tool with a page size of 100." +
 		" After retrieving the remote sites, compare them to the sites defined in the provided configuration. " +
@@ -846,7 +865,7 @@ func getMissingSites(d *schema.ResourceData, resources []TfResource) string {
 		" If a tool call is required to obtain the data, call it." +
 		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
 
-	sitesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
+	sitesAnswer, _ := answerWithTools(toolDesc, question, sess)
 	return sitesAnswer
 }
 

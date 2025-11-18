@@ -122,16 +122,7 @@ func (a *Agent) Answer(ctx context.Context, prompt string) (string, error) {
 	return textBlock.Value, nil
 }
 
-func getToolToExecute(ctx context.Context, mcpSess *mcp.ClientSession, question string, agent Agent) (*ToolCall, error) {
-	mcpTools, err := getMcpTools(ctx, mcpSess)
-	if err != nil {
-		log.Fatalf("failed to get MCP tools: %v", err)
-	}
-
-	toolsDesc, err := marshalToolsForPrompt(mcpTools)
-	if err != nil {
-		log.Fatalf("failed to marshal tools: %v", err)
-	}
+func getToolToExecute(ctx context.Context, mcpSess *mcp.ClientSession, toolsDesc string, question string, agent Agent) (*ToolCall, error) {
 
 	// ----- First Bedrock call: which tool to use? -----
 	prompt := buildToolSelectionPrompt(question, toolsDesc)
@@ -162,6 +153,31 @@ func getToolToExecute(ctx context.Context, mcpSess *mcp.ClientSession, question 
 
 }
 
+func getMCPSession(ctx context.Context, api_id string, api_key string) (*mcp.ClientSession, error) {
+	mcpArgs := strings.Fields("mcp-remote https://api.stage.impervaservices.com/cwaf-external-mcp/mcp/ --header X-Api-Id:" + api_id + " --header X-Api-Key:" + api_key)
+
+	mcpSess, err := newMCPSession(ctx, "npx", mcpArgs...)
+
+	if err != nil {
+		log.Fatalf("failed to connect to MCP server: %v", err)
+		return nil, err
+	}
+	return mcpSess, nil
+}
+
+func getMCPToolsDescription(ctx context.Context, mcpSess *mcp.ClientSession) (string, error) {
+	mcpTools, err := getMcpTools(ctx, mcpSess)
+	if err != nil {
+		log.Fatalf("failed to get MCP tools: %v", err)
+	}
+
+	toolsDesc, err := marshalToolsForPrompt(mcpTools)
+	if err != nil {
+		log.Fatalf("failed to marshal tools: %v", err)
+	}
+	return toolsDesc, err
+}
+
 func executeMCPTool(ctx context.Context, mcpSess *mcp.ClientSession, toolName string, argumensts map[string]any) (*mcp.CallToolResult, error) {
 	return mcpSess.CallTool(ctx, &mcp.CallToolParams{
 		Name:      toolName,
@@ -190,22 +206,13 @@ func queryAgent(prompt string) (string, error) {
 	return finalAnswer, nil
 }
 
-func answerWithTools(question string, api_id string, api_key string) (string, error) {
+func answerWithTools(toolsDesc string, question string, mcpSess *mcp.ClientSession) (string, error) {
 	ctx := context.Background()
 
 	brClient, err := newBedrockClient(ctx, "us-west-2", "dev")
 	if err != nil {
 		log.Fatalf("failed to create Bedrock client: %v", err)
 	}
-
-	mcpArgs := strings.Fields("mcp-remote https://api.stage.impervaservices.com/cwaf-external-mcp/mcp/ --header X-Api-Id:" + api_id + " --header X-Api-Key:" + api_key)
-
-	mcpSess, err := newMCPSession(ctx, "npx", mcpArgs...)
-
-	if err != nil {
-		log.Fatalf("failed to connect to MCP server: %v", err)
-	}
-	defer mcpSess.Close()
 
 	agent := &Agent{
 		br:      brClient,
@@ -217,7 +224,7 @@ func answerWithTools(question string, api_id string, api_key string) (string, er
 	if question == "" {
 		return "", errors.New("question cannot be empty")
 	}
-	tc, err := getToolToExecute(ctx, mcpSess, question, *agent)
+	tc, err := getToolToExecute(ctx, mcpSess, toolsDesc, question, *agent)
 	if err != nil {
 		log.Fatalf("failed to get tool to execute: %v", err)
 		return "", errors.New("failed to get tool to execute")
