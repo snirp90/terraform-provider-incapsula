@@ -237,7 +237,7 @@ func runDiagnostics(d *schema.ResourceData, resources []TfResource, docs string,
 	answer := ""
 	answer = answer + "\n" + getMissingResources(d, resources)
 	answer = answer + "\n" + getGeneralTFBestPractices(allResourcesFromFiles)
-	answer = answer + "\n" +  getImpervaResourceReplaceSuggestions(allResourcesFromFiles)
+	answer = answer + "\n" + getImpervaResourceReplaceSuggestions(allResourcesFromFiles)
 	answer = answer + "\n" + getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, docs)
 	return answer
 }
@@ -567,7 +567,7 @@ Focus on the following areas, arranged by priority:
 	   - Detect any resources that are marked as deprecated in the official provider documentation, and suggest replacements based on the latest provider documentation. 
 	
 	2. **Deprecated Arguments or Attributes**  
-	   - Identify arguments or attributes within resources that are deprecated, and suggest replacements based on the latest provider documentation. 
+	   - Identify deprecated arguments or attributes within resources, and suggest replacements based on the latest provider documentation. 
 	
 	3. **Removed or Breaking-Change Arguments**  
 	   - Find any arguments that have been removed or changed in a way that breaks backward compatibility.
