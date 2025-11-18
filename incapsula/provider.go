@@ -223,7 +223,7 @@ func getLLMSuggestions(d *schema.ResourceData) diag.Diagnostics {
 func runDiagnostics(d *schema.ResourceData, resources []TfResource, docs string, allResourcesFromFiles string) diag.Diagnostics {
 	var diags diag.Diagnostics
 	answer := ""
-	//answer += getMissingResources(d, resources)
+	answer += getMissingResources(d, resources)
 	//answer += getGeneralTFBestPractices(allResourcesFromFiles)
 	//answer += getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles, docs)
 	answer += getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, docs)
@@ -736,11 +736,36 @@ func getMissingResources(d *schema.ResourceData, resources []TfResource) string 
 	//	"[{{ \"resource_type\": \"<resource_type>\", \"resource_id\": \"<resource_id>\", \"site name\": \"<site_name>\" }}]" +
 	//	" given resources: " + fmt.Sprintf("%v", resources)
 
-	question := "Fetch all the sites from the backend, use pagination 50, or fetch all pages. then output all the sites in the following json format: " +
-		"[{{ \"resource_type\": \"<resource_type>\", \"resource_id\": \"<resource_id>\", \"site name\": \"<site_name>\" }}]"
+	question := "Your task is to gather the full list of sites using the available MCP tool and compare it against the configuration provided in the user message." +
+		" Fetch all sites using the tool with a page size of 100." +
+		" After retrieving the remote sites, compare them to the sites defined in the provided configuration. " +
+		" Produce a JSON array containing only the differences between the two sets. " +
+		" Your output must contain only the following two sections, with no additional words, explanations, or text:\n" +
+		" add these resources to your configuration:\nresource \"incapsula_site_v3\" \"<site_name>\" {{ name = \"<site_name>\" }}" +
+		" run this import commands \nterraform import incapsula_site_v3.<site_name> <resource_id>" +
+		" Output only these blocks with no additional words, explanations, or text." +
+		" Only include sites that exist in one source but not the other." +
+		" If a tool call is required to obtain the data, call it." +
+		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
 
-	answer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
-	return answer
+	sitesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
+
+	//question := "Your task is to gather the full list of rules using the available MCP tool and compare it against the configuration provided in the user message." +
+	//	" Fetch all the account rules using the tool with a page size of 100." +
+	//	" After retrieving the remote rules, compare them to the rules defined in the provided configuration. " +
+	//	" Produce a JSON array containing only the differences between the two sets. " +
+	//	" Your output must contain only the following two sections, with no additional words, explanations, or text. replace the all the spaces in the rule name with _:\n" +
+	//	" add these resources to your configuration:" +
+	//	" \nresource \"incapsula_incap_rule\" \"<rule_name>\" {{ name = \"<rule_name>\" site_id = \"<site_id>\" action = \"<action>\" filter = \"<filter>\" enabled = \"<enabled>\"  }}" +
+	//	" run this import commands \nterraform import incapsula_incap_rule.<rule_name> <resource_id>" +
+	//	" Output only these blocks with no additional words, explanations, or text." +
+	//	" Only include sites that exist in one source but not the other." +
+	//	" If a tool call is required to obtain the data, call it." +
+	//	" this is the provided configuration: " + fmt.Sprintf("%v", resources)
+	//
+	//rulesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
+
+	return sitesAnswer
 }
 
 func getAllResourcesTypeAndId(statePath string) []TfResource {
