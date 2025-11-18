@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -215,11 +216,20 @@ func getLLMSuggestions(d *schema.ResourceData) diag.Diagnostics {
 		log.Printf("Resource Type: %s, ID: %s\n", res.Type, res.Id)
 	}
 	allResourcesFromFiles, _ := getAllResourcesFromTfFiles(dir)
+
 	log.Printf("Resource from file: %s\n", allResourcesFromFiles)
 	docs, _ := readAndConcatWebsiteFiles("website")
-	//rowAnswer := runDiagnostics(d, resources, docs, allResourcesFromFiles)
-	rowAnswer := runDiagnosticsParallel(d, resources, docs, allResourcesFromFiles)
-	return createHtmlReport(d, rowAnswer)
+
+	ctx := context.Background()
+
+	brClient, err := newBedrockClient(ctx, "us-west-2", "dev")
+	if err != nil {
+		log.Fatalf("failed to create Bedrock client: %v", err)
+	}
+
+	//rowAnswer := runDiagnostics(d, resources, docs, allResourcesFromFiles, ctx, brClient)
+	diagnostic, missingResources := runDiagnosticsParallel(d, resources, docs, allResourcesFromFiles, ctx, brClient)
+	return createHtmlReport(d, diagnostic, missingResources, ctx, brClient)
 	//return createResponse(d, rowAnswer)
 }
 
@@ -234,19 +244,20 @@ func createResponse(d *schema.ResourceData, answer string) diag.Diagnostics {
 	return diags
 }
 
-func runDiagnostics(d *schema.ResourceData, resources []TfResource, docs string, allResourcesFromFiles string) string {
+func runDiagnostics(d *schema.ResourceData, resources []TfResource, docs string, allResourcesFromFiles string, ctx context.Context, client *bedrockruntime.Client) string {
 	answer := ""
-	answer = answer + "\n" + getMissingResources(d, resources)
-	answer = answer + "\n" + getGeneralTFBestPractices(allResourcesFromFiles)
-	answer = answer + "\n" + getImpervaResourceReplaceSuggestions(allResourcesFromFiles)
-	answer = answer + "\n" + getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, docs)
+	answer = answer + "\n" + getMissingResources(d, resources, ctx, client)
+	answer = answer + "\n" + getGeneralTFBestPractices(allResourcesFromFiles, ctx, client)
+	answer = answer + "\n" + getImpervaResourceReplaceSuggestions(allResourcesFromFiles, ctx, client)
+	answer = answer + "\n" + getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, docs, ctx, client)
 	return answer
 }
 
-func createHtmlReport(d *schema.ResourceData, finalAnswer string) diag.Diagnostics {
+func createHtmlReport(d *schema.ResourceData, diagmostic string, missingResources string, ctx context.Context, client *bedrockruntime.Client) diag.Diagnostics {
 	var diags diag.Diagnostics
-	answer := escapeBraces(finalAnswer)
-	htmlFile := getHtmlContent(answer)
+	diagmostic = escapeBraces(diagmostic)
+	missingResources = escapeBraces(missingResources)
+	htmlFile := getHtmlContent(diagmostic, missingResources, ctx, client)
 	link := saveHtmlToFile(d, htmlFile)
 	answerWithImage := getAiAnswer(link)
 	diags = append(diags, diag.Diagnostic{
@@ -281,27 +292,28 @@ func saveHtmlToFile(d *schema.ResourceData, content string) string {
 	return fileURL
 }
 
-func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, docs string, allResourcesFromFiles string) string {
+func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, docs string, allResourcesFromFiles string, ctx context.Context, client *bedrockruntime.Client) (string, string) {
 
 	var wg sync.WaitGroup
-	results := make(chan string, 4)
+	results := make(chan string, 3)
+	missingResources := make(chan string, 1)
 
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		results <- getMissingResources(d, resources)
+		missingResources <- getMissingResources(d, resources, ctx, client)
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getGeneralTFBestPractices(allResourcesFromFiles)
+		results <- getGeneralTFBestPractices(allResourcesFromFiles, ctx, client)
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getImpervaResourceReplaceSuggestions(allResourcesFromFiles)
+		results <- getImpervaResourceReplaceSuggestions(allResourcesFromFiles, ctx, client)
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, docs)
+		results <- getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, docs, ctx, client)
 	}()
 
 	wg.Wait()
@@ -311,11 +323,11 @@ func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, docs
 	for r := range results {
 		answers = append(answers, r)
 	}
-
-	return strings.Join(answers, "\n")
+	missing := <-missingResources
+	return strings.Join(answers, "\n"), missing
 }
 
-func getHtmlContent(finalAnswer string) string {
+func getHtmlContent(diagnostic string, missingResources string, ctx context.Context, client *bedrockruntime.Client) string {
 	question := fmt.Sprintf(`
 You are a system that takes a final answer to the user question and turns that answer into a single, well-structured, visually organized HTML file.
 Overall behavior
@@ -335,6 +347,7 @@ Any process, timeline, or hierarchy that can be visualized
 Keep the full content without removing or summarizing anything; retain all original text, details, and elements in their entirety.
 All code snippets MUST be included in the recommendations.
 Include BOTH original snippets and improved snippets (if exists), presented in a before-after form.
+Missing resources: include a dedicated page for the attached missing resources list.
 HTML requirements:
 Produce a complete HTML5 document:
 Use this structure (adapt as needed):
@@ -403,13 +416,16 @@ Do not wrap it in code fences.
 
 Do not add any explanation or commentary.
 
-final answer to base the HTML on: %s`, finalAnswer)
+final answer to base the HTML on: %s
 
-	answer, _ := queryAgent(question)
+the missing resources are: %s
+`, diagnostic, missingResources)
+
+	answer, _ := queryAgent(question, ctx, client)
 	return answer
 }
 
-func getImpervaNewFeaturesSuggestions(d *schema.ResourceData, resources string, docs string) string {
+func getImpervaNewFeaturesSuggestions(d *schema.ResourceData, resources string, docs string, ctx context.Context, client *bedrockruntime.Client) string {
 	newFeatures := getNewFeatures()
 	question := fmt.Sprintf(`You are an infrastructure-as-code assistant that helps upgrade a customer's Terraform configuration to use new features of a specific Terraform provider.
 
@@ -529,7 +545,7 @@ The current Terraform code is as follows: %s
 
 `, docs, newFeatures, resources)
 
-	answer, _ := queryAgent(question)
+	answer, _ := queryAgent(question, ctx, client)
 	return answer
 }
 
@@ -537,7 +553,7 @@ func getNewFeatures() string {
 	return "site level managed certificate"
 }
 
-func getImpervaResourceReplaceSuggestions(resources string) string {
+func getImpervaResourceReplaceSuggestions(resources string, ctx context.Context, client *bedrockruntime.Client) string {
 	question := fmt.Sprintf(`You are an expert Terraform engineer specializing in provider-level correctness.
 Your task is to analyze Terraform files I provide and compare them against the current official provider documentation.
 
@@ -622,11 +638,11 @@ Important Rules:
 - If the provided Terraform is already optimal, say so and explain why.
 
 The current Terraform resources are as follows: %s`, resources)
-	answer, _ := queryAgent(question)
+	answer, _ := queryAgent(question, ctx, client)
 	return answer
 }
 
-func getGeneralTFBestPractices(resources string) string {
+func getGeneralTFBestPractices(resources string, ctx context.Context, client *bedrockruntime.Client) string {
 	question := fmt.Sprintf(`You are an expert Terraform engineer and cloud architect.
 Your task is to analyze the Terraform code I provide and suggest improvements strictly following Terraform best practices specified in the following link: https://www.terraform-best-practices.com/
 
@@ -710,7 +726,7 @@ Important Rules:
 
 The current Terraform resources are as follows: %s`, resources)
 
-	answer, _ := queryAgent(question)
+	answer, _ := queryAgent(question, ctx, client)
 	return answer
 }
 
@@ -753,9 +769,8 @@ func readAndConcatWebsiteFiles(root string) (string, error) {
 	return builder.String(), nil
 }
 
-func getMissingResources(d *schema.ResourceData, resources []TfResource) string {
+func getMissingResources(d *schema.ResourceData, resources []TfResource, ctx context.Context, client *bedrockruntime.Client) string {
 
-	ctx := context.Background()
 	mcpSess, err := getMCPSession(ctx, d.Get("api_id").(string), d.Get("api_key").(string))
 
 	if err != nil {
@@ -775,15 +790,15 @@ func getMissingResources(d *schema.ResourceData, resources []TfResource) string 
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		results <- getMissingSites(resources, mcpSess, toolsDesc)
+		results <- getMissingSites(resources, mcpSess, toolsDesc, ctx, client)
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getMissingRules(resources, mcpSess, toolsDesc)
+		results <- getMissingRules(resources, mcpSess, toolsDesc, ctx, client)
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getMissingPolicies(resources, mcpSess, toolsDesc)
+		results <- getMissingPolicies(resources, mcpSess, toolsDesc, ctx, client)
 	}()
 
 	wg.Wait()
@@ -794,26 +809,10 @@ func getMissingResources(d *schema.ResourceData, resources []TfResource) string 
 		answers = append(answers, r)
 	}
 
-	question := "You are a precise configuration merger.\n\nYou will receive several text snippets. Each snippet has this exact structure:" +
-		" add these resources to your configuration\n<resources>\n...list of resources...\n</resources>\nrun this import commands\n<commands>\n...list of commands...\n</commands>" +
-		" Your task is to combine ALL of these snippets into ONE single output that follows the exact same structure, " +
-		"preserving the original order of both the <resources> blocks and the <commands> blocks." +
-		" Rules: 1. Keep the introductory lines exactly as:  add these resources to your configuration  <resources>" +
-		" 2. Inside <resources>...</resources>, output the content of every <resources> block from the inputs in the exact order the inputs appeared. Do NOT deduplicate, sort, or modify lines unless they are 100% identical." +
-		" 3. Then write:   run this import commands   <commands>" +
-		" 4. Inside <commands>...</commands>, output the content of every <commands> block from the inputs in the exact order the inputs appeared. Again, preserve order and do not deduplicate unless lines are identical." +
-		" 5. If a snippet is missing either the <resources> or <commands> section, simply skip that missing part. 6. Output nothing else—no explanations, no markdown, no extra text." +
-		" Now merge the following snippets:" +
-		" Sites differences:\n" + answers[0] + "\n" +
-		" Rules differences:\n" + answers[1] + "\n" +
-		" Policies differences:\n" + answers[2] + "\n" +
-		" Output only the combined answer with no additional words, explanations, or text."
-
-	answer, _ := queryAgent(question)
-	return "Issue — missing resources\nexecute the following commands to import the missing resources\n" + answer
+	return "Issue — missing resources\nexecute the following commands to import the missing resources\n" + strings.Join(answers, "\n")
 }
 
-func getMissingPolicies(resources []TfResource, sess *mcp.ClientSession, toolDesc string) string {
+func getMissingPolicies(resources []TfResource, sess *mcp.ClientSession, toolDesc string, ctx context.Context, client *bedrockruntime.Client) string {
 	question := "Your task is to gather the full list of policies using the available MCP tool and compare it against the configuration provided in the user message." +
 		" Fetch all the account policies using the tool with a page size of 100." +
 		" After retrieving the remote policies, compare them to the policies defined in the provided configuration. " +
@@ -828,11 +827,11 @@ func getMissingPolicies(resources []TfResource, sess *mcp.ClientSession, toolDes
 		" If a tool call is required to obtain the data, call it." +
 		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
 
-	policiesAnswer, _ := answerWithTools(toolDesc, question, sess)
+	policiesAnswer, _ := answerWithTools(toolDesc, question, sess, ctx, client)
 	return policiesAnswer
 }
 
-func getMissingRules(resources []TfResource, sess *mcp.ClientSession, toolDesc string) string {
+func getMissingRules(resources []TfResource, sess *mcp.ClientSession, toolDesc string, ctx context.Context, client *bedrockruntime.Client) string {
 	question := "Your task is to gather the full list of rules using the available MCP tool and compare it against the configuration provided in the user message." +
 		" Fetch all the account rules using the tool with a page size of 100." +
 		" After retrieving the remote rules, compare them to the rules defined in the provided configuration. " +
@@ -847,11 +846,11 @@ func getMissingRules(resources []TfResource, sess *mcp.ClientSession, toolDesc s
 		" If a tool call is required to obtain the data, call it." +
 		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
 
-	rulesAnswer, _ := answerWithTools(toolDesc, question, sess)
+	rulesAnswer, _ := answerWithTools(toolDesc, question, sess, ctx, client)
 	return rulesAnswer
 }
 
-func getMissingSites(resources []TfResource, sess *mcp.ClientSession, toolDesc string) string {
+func getMissingSites(resources []TfResource, sess *mcp.ClientSession, toolDesc string, ctx context.Context, client *bedrockruntime.Client) string {
 	question := "Your task is to gather the full list of sites using the available MCP tool and compare it against the configuration provided in the user message." +
 		" Fetch all sites using the tool with a page size of 100." +
 		" After retrieving the remote sites, compare them to the sites defined in the provided configuration. " +
@@ -865,7 +864,7 @@ func getMissingSites(resources []TfResource, sess *mcp.ClientSession, toolDesc s
 		" If a tool call is required to obtain the data, call it." +
 		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
 
-	sitesAnswer, _ := answerWithTools(toolDesc, question, sess)
+	sitesAnswer, _ := answerWithTools(toolDesc, question, sess, ctx, client)
 	return sitesAnswer
 }
 

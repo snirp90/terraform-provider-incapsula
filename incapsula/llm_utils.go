@@ -185,14 +185,10 @@ func executeMCPTool(ctx context.Context, mcpSess *mcp.ClientSession, toolName st
 	})
 }
 
-func queryAgent(prompt string) (string, error) {
-	ctx := context.Background()
-	brClient, err := newBedrockClient(ctx, "us-west-2", "dev")
-	if err != nil {
-		log.Fatalf("failed to create Bedrock client: %v", err)
-	}
+func queryAgent(prompt string, ctx context.Context, client *bedrockruntime.Client) (string, error) {
+
 	agent := &Agent{
-		br:      brClient,
+		br:      client,
 		modelID: "anthropic.claude-3-sonnet-20240229-v1:0",
 	}
 
@@ -206,16 +202,10 @@ func queryAgent(prompt string) (string, error) {
 	return finalAnswer, nil
 }
 
-func answerWithTools(toolsDesc string, question string, mcpSess *mcp.ClientSession) (string, error) {
-	ctx := context.Background()
-
-	brClient, err := newBedrockClient(ctx, "us-west-2", "dev")
-	if err != nil {
-		log.Fatalf("failed to create Bedrock client: %v", err)
-	}
+func answerWithTools(toolsDesc string, question string, mcpSess *mcp.ClientSession, ctx context.Context, client *bedrockruntime.Client) (string, error) {
 
 	agent := &Agent{
-		br:      brClient,
+		br:      client,
 		modelID: "anthropic.claude-3-sonnet-20240229-v1:0",
 		mcpSess: mcpSess,
 	}
