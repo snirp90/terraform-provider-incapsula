@@ -401,39 +401,47 @@ What You Must Do
 1. Identify Issues
 2. Provide Exact Replacement Snippets
 
-Find any problems, risks, or opportunities for improvement, including:
+Focus on the following areas, arranged by priority:
 
-  	- Security issues (IAM, secrets handling, encryption, least privilege)
-	- Deprecated resources or arguments
-	- Hard-coded values
-  	- Missing or weak variables, types, validation
-  	- Resource naming inconsistencies
-  	- Poor module structure or missing modules
-  	- Inefficient or costly configurations
-  	- Missing tags/labels
-	- Provider misconfigurations
-  	- Lack of version pinning
-  	- Anything that violates Terraform or cloud best practices
+	1. **Security Best Practices**  
+	   - Ensure secrets (e.g., API keys, passwords) are not hard-coded and are securely managed using variables or secret management tools.  
+	   - Verify IAM policies follow the principle of least privilege, avoiding overly permissive roles.  
+	   - Check for proper encryption of sensitive data both in transit and at rest.  
+	
+	2. **Provider and Resource Configuration**  
+	   - Identify deprecated resources, arguments, or attributes and suggest replacements based on the latest provider documentation.  
+	   - Ensure provider configurations are correct and up-to-date, including version pinning to avoid unexpected behavior.  
+	
+	3. **Code Modularity and Reusability**  
+	   - Evaluate the use of modules to ensure proper structure and reusability of Terraform code.  
+	   - Identify opportunities to refactor repetitive code into reusable modules.  
+	
+	4. **Variable and Input Validation**  
+	   - Replace hard-coded values with variables to improve flexibility and maintainability.  
+	   - Ensure variables have proper types, validation rules, and default values where applicable.  
+	
+	5. **Resource Naming and Tagging**  
+	   - Check for consistent and meaningful resource naming conventions.  
+	   - Ensure resources are tagged with metadata (e.g., environment, owner, purpose) to improve management and cost tracking.  
+	
+	6. **Cost Optimization and Efficiency**  
+	   - Identify inefficient or costly configurations and suggest improvements to reduce resource usage and expenses.  
+	
+	7. **General Best Practices**  
+	   - Ensure the code adheres to Terraform and cloud provider best practices, avoiding anti-patterns or risky configurations.  
+	   - Verify that all required attributes are present and correctly configured.  
 
-2. Provide Exact Replacement Snippets
+For each issue identified, provide:  
+- A clear description of the problem.  
+- The original Terraform snippet.  
+- An improved Terraform snippet (ready to paste).  
+- A brief explanation of why the improvement is necessary and how it aligns with best practices.
 
-For each issue, you must output:
-
-A. Original snippet (copied exactly):
-<original>
-
-B. Improved snippet (full replacement, ready to paste):
-<improved>
-
-C. Brief explanation of why this is better
-
-Keep context and variable names unless renaming is part of the improvement.
-
-Combine multiple improvements into one clean replacement snippet.
-
-Replacement must be syntactically correct.
-
-Never output partial fragments—always show complete blocks.
+Important Instructions:
+- Keep context and variable names unless renaming is part of the improvement, and don't suggest names that already exists'
+- Combine multiple improvements into one clean replacement snippet.
+- Ensure the replacement is syntactically correct.
+- Never output partial fragments—always provide complete blocks.
 
 3. Output Format (Must Follow Exactly)
 
@@ -456,19 +464,15 @@ After analyzing all issues:
 
 Summary of Improvements
 
-Bullet points summarizing key changes.
+- Bullet points summarizing key changes.
 
 Important Rules
 
-Do not invent architecture not implied by the code.
-
-Only modify what is necessary.
-
-Keep improvements realistic and aligned with actual Terraform usage.
-
-If something looks dangerous or costly, call it out clearly.
-
-If the provided Terraform is already optimal, say so and explain why.
+- Do not invent architecture not implied by the code.
+- Only modify what is necessary.
+- Keep improvements realistic and aligned with actual Terraform usage.
+- If something looks dangerous or costly, call it out clearly.
+- If the provided Terraform is already optimal, say so and explain why.
 
 The current Terraform resources are as follows: %s`, resources)
 
