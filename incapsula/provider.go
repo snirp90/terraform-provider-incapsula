@@ -404,12 +404,12 @@ What You Must Do
 Focus on the following areas, arranged by priority:
 
 	1. **Security Best Practices**  
-	   - Ensure secrets (e.g., API keys, passwords) are not hard-coded and are securely managed using variables or secret management tools.  
+	   - Ensure secrets values like passwords are not hard-coded
 	   - Verify IAM policies follow the principle of least privilege, avoiding overly permissive roles.  
 	   - Check for proper encryption of sensitive data both in transit and at rest.  
 	
 	2. **Provider and Resource Configuration**  
-	   - Identify deprecated resources, arguments, or attributes and suggest replacements based on the latest provider documentation.  
+	   - Identify deprecated arguments, or attributes and suggest replacements based on the latest provider documentation.  
 	   - Ensure provider configurations are correct and up-to-date, including version pinning to avoid unexpected behavior.  
 	
 	3. **Code Modularity and Reusability**  
@@ -421,7 +421,7 @@ Focus on the following areas, arranged by priority:
 	   - Ensure variables have proper types, validation rules, and default values where applicable.  
 	
 	5. **Resource Naming and Tagging**  
-	   - Check for consistent and meaningful resource naming conventions.  
+	   - Check for consistent and meaningful resource naming conventions and not the resource parameters.
 	   - Ensure resources are tagged with metadata (e.g., environment, owner, purpose) to improve management and cost tracking.  
 	
 	6. **Cost Optimization and Efficiency**  
