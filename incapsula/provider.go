@@ -1,5 +1,6 @@
 package incapsula
 
+import "C"
 import (
 	"context"
 	"encoding/json"
@@ -9,12 +10,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/chromedp/chromedp"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -217,18 +215,36 @@ func getLLMSuggestions(d *schema.ResourceData) diag.Diagnostics {
 	}
 	allResourcesFromFiles, _ := getAllResourcesFromTfFiles(dir)
 	log.Printf("Resource from file: %s\n", allResourcesFromFiles)
-
-	return runDiagnostics(d, resources, allResourcesFromFiles)
-	//return runDiagnosticsParallel(d, resources, allResourcesFromFiles)
+	docs, _ := readAndConcatWebsiteFiles("website")
+	rowAnswer := runDiagnostics(d, resources, docs, allResourcesFromFiles)
+	//rowAnswer := runDiagnosticsParallel(d, resources, docs, allResourcesFromFiles)
+	//return createHtmlReport(d, rowAnswer)
+	return createResponse(d, rowAnswer)
 }
 
-func runDiagnostics(d *schema.ResourceData, resources []TfResource, allResourcesFromFiles string) diag.Diagnostics {
+func createResponse(d *schema.ResourceData, answer string) diag.Diagnostics {
 	var diags diag.Diagnostics
+	diags = append(diags, diag.Diagnostic{
+		Severity: diag.Warning,
+		Summary:  "Best Practice Suggestion",
+		Detail:   answer,
+	})
+	print(answer)
+	return diags
+}
+
+func runDiagnostics(d *schema.ResourceData, resources []TfResource, docs string, allResourcesFromFiles string) string {
 	answer := ""
-	answer += getMissingResources(d, resources)
-	answer += getGeneralTFBestPractices(allResourcesFromFiles)
-	answer += getImpervaResourceReplaceSuggestions(allResourcesFromFiles)
-	answer += getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles)
+	answer = answer + "\n" + getMissingResources(d, resources)
+	answer = answer + "\n" + getGeneralTFBestPractices(allResourcesFromFiles)
+	answer = answer + "\n" +  getImpervaResourceReplaceSuggestions(allResourcesFromFiles)
+	answer = answer + "\n" + getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, docs)
+	return answer
+}
+
+func createHtmlReport(d *schema.ResourceData, finalAnswer string) diag.Diagnostics {
+	var diags diag.Diagnostics
+	answer := escapeBraces(finalAnswer)
 	htmlFile := getHtmlContent(d, answer)
 	link := saveHtmlToFile(d, htmlFile)
 	answerWithImage := getAiAnswer(link)
@@ -239,6 +255,12 @@ func runDiagnostics(d *schema.ResourceData, resources []TfResource, allResources
 	})
 	print(htmlFile)
 	return diags
+}
+
+func escapeBraces(answer string) string {
+	answer = strings.ReplaceAll(answer, "{", "{{")
+	answer = strings.ReplaceAll(answer, "}", "}}")
+	return answer
 }
 
 func saveHtmlToFile(d *schema.ResourceData, content string) string {
@@ -258,7 +280,7 @@ func saveHtmlToFile(d *schema.ResourceData, content string) string {
 	return fileURL
 }
 
-func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, allResourcesFromFiles string) string {
+func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, docs string, allResourcesFromFiles string) string {
 	var wg sync.WaitGroup
 	results := make(chan string, 4)
 
@@ -277,7 +299,7 @@ func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, allR
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles)
+		results <- getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, docs)
 	}()
 
 	wg.Wait()
@@ -320,6 +342,8 @@ Any process, timeline, or hierarchy that can be visualized
 Summarize in clear, concise text (no huge paragraphs).
 
 All code snippets MUST be included in the recomendations.
+
+include BOTH original snippets and improved snippets. (if exists)
 
 HTML requirements:
 
@@ -399,12 +423,132 @@ User request to base the HTML on: %s`, finalAnswer)
 	return answer
 }
 
-func getImpervaNewFeaturesSuggestions(d *schema.ResourceData, resources string) string {
-	releaseNotes := getLastMonthsReleaseNotes()
-	question := "you are slim shady, whats your name? out put should be a string only." + releaseNotes
+func getImpervaNewFeaturesSuggestions(d *schema.ResourceData, resources string, docs string) string {
+	newFeatures := getNewFeatures()
+	question := fmt.Sprintf(`You are an infrastructure-as-code assistant that helps upgrade a customer's Terraform configuration to use new features of a specific Terraform provider.
+
+You will receive three kinds of inputs:
+1) A list of NEW FEATURES for the provider (high level description, changelog, release notes, etc.).
+2) The PROVIDER DOCUMENTATION (resources, data sources, arguments, example configs).
+3) The CUSTOMER TERRAFORM FILE(S) (current .tf configuration).
+
+Your goals:
+- Understand what each new feature does and which provider resources / data sources / arguments are related to it.
+- Inspect the customer’s existing Terraform configuration.
+- Identify which new features are NOT yet used in the customer’s config.
+- Propose concrete Terraform changes (new resources, data sources, arguments, or blocks) that would enable those missing features.
+
+====================
+WORKFLOW
+====================
+
+1. Parse the new features
+- For each new feature:
+  - Give it a short identifier (e.g., "Feature 1 – Enhanced logging").
+  - Summarize what it does in 1–2 sentences.
+  - Map it to specific provider documentation elements:
+    - Resource types
+    - Data sources
+    - Arguments / nested blocks
+    - Any version constraints
+
+2. Map features to provider documentation
+- For each feature:
+  - Find the most relevant resource(s) and/or data source(s).
+  - Note the required and important optional arguments.
+  - Capture any limitations or prerequisites from the docs.
+- Do not invent arguments or resources that are not present in the docs.
+  - If something is unclear or ambiguous, explicitly say so.
+
+3. Analyze the customer Terraform files
+- Build a mental model of the configuration:
+  - Which provider is used and what version constraints exist.
+  - Which resources and data sources are already present.
+  - Common naming patterns, tags, variable naming, modules, and conventions.
+- For each new feature:
+  - Check if it is already used in any resource, data source, or argument.
+  - If it is used, briefly note where and how.
+  - If it is NOT used, mark the feature as "missing".
+
+4. Suggest additions/changes for missing features
+For every feature marked as “missing”:
+- Propose one or more Terraform changes that would enable the feature:
+  - New resource blocks, data sources, or nested blocks.
+  - New arguments on existing resources (if clearly safe and backwards-compatible).
+- Follow these rules:
+  - Preserve the customer’s style:
+    - Naming conventions for resources and variables.
+    - Tagging conventions.
+    - Module structure and layout.
+  - Minimize disruptions:
+    - Prefer adding new blocks or arguments over refactoring everything.
+    - Avoid destructive or breaking changes unless clearly required and explicitly flagged as such.
+  - Be explicit about any assumptions you make about the environment.
+
+5. Validate and annotate your suggestions
+- For each suggested change:
+  - Reference the relevant section(s) of the provider docs (resource name, argument names, behavior).
+  - Explain briefly how this change activates the new feature.
+  - Note any potential side effects, risks, or prerequisites (e.g., "requires provider version >= X.Y").
+
+====================
+OUTPUT FORMAT
+====================
+
+Respond using this structure:
+
+1) Feature Coverage Summary
+   - For each feature:
+     - Feature ID:
+     - Used in current config?: (Yes/No/Partial)
+     - Short reasoning (1–2 sentences).
+
+2) Proposed Terraform Changes
+   For each feature with "No" or "Partial" usage:
+   - Feature ID:
+   - Rationale:
+   - Suggested change type: (New resource / New data source / New arguments / Other)
+   - Terraform snippet:
+     "hcl
+	# Your suggested HCL code here
+	"
+   - Notes:
+     - Relevant provider resources/data sources/arguments:
+     - Version requirements:
+     - Risks or side effects:
+     - Assumptions:
+
+3) Optional Refactoring / Improvements (if applicable)
+   - Only include if there are clearly beneficial and low-risk refactors.
+   - List them as bullet points, each with:
+     - What to change.
+     - Why it’s beneficial.
+     - Whether it is backwards-compatible.
+
+====================
+STYLE & CONSTRAINTS
+====================
+
+- Use valid HCL syntax in all snippets.
+- Do NOT invent undocumented arguments, blocks, or resources.
+- If you are unsure about something due to ambiguous docs or missing context, clearly say "UNCERTAIN" and explain why.
+- Keep explanations concise but clear.
+- Do not change or remove existing resources unless it is clearly necessary for the new feature; if you propose such a change, highlight it as potentially breaking.
+
+The Imperva provider docs are: %s
+
+The new features are: %s
+
+The current Terraform code is as follows: %s
+
+`, docs, newFeatures, resources)
 
 	answer, _ := queryAgent(question)
 	return answer
+}
+
+func getNewFeatures() string {
+	return "site level managed certificate"
 }
 
 func getImpervaResourceReplaceSuggestions(resources string) string {
@@ -600,134 +744,6 @@ func getAiAnswer(answer string) string {
  you can find MY recomendations in the following link: ` + answer
 }
 
-const startURL = "https://docs-cybersec.thalesgroup.com/bundle/cloud-application-security/page/release-notes/2025-11-16.htm"
-
-type link struct {
-	Href string `json:"href"`
-	Text string `json:"text"`
-}
-
-type ReleaseNote struct {
-	Date    time.Time `json:"date"`
-	URL     string    `json:"url"`
-	Title   string    `json:"title"`
-	Content string    `json:"content"`
-}
-
-func getLastMonthsReleaseNotes() string {
-
-	const startURL = "https://docs-cybersec.thalesgroup.com/csh?context=latest_release_notes"
-
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(),
-		chromedp.Flag("headless", false),
-	)
-	defer cancelAlloc()
-
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-
-	// 1) Open "latest_release_notes" and let it redirect to the latest release page
-	var rawLinksJSON string
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(startURL),
-		chromedp.WaitReady(`body`, chromedp.ByQuery),
-		chromedp.Evaluate(
-			`JSON.stringify(
-				Array.from(document.querySelectorAll('a[href*="/release-notes/"]'))
-					.map(a => ({href: a.href, text: a.textContent.trim()}))
-			)`,
-			&rawLinksJSON,
-		),
-	); err != nil {
-		log.Fatalf("failed to load page or collect links: %v", err)
-	}
-
-	var links []link
-	if err := json.Unmarshal([]byte(rawLinksJSON), &links); err != nil {
-		log.Fatalf("failed to unmarshal links JSON: %v", err)
-	}
-
-	// 2) Filter links to last 3 months based on the date in the URL
-	reDate := regexp.MustCompile(`/release-notes/(\d{4}-\d{2}-\d{2})\.htm`)
-	cutoff := time.Now().AddDate(0, -3, 0)
-
-	var recentLinks []link
-	for _, l := range links {
-		m := reDate.FindStringSubmatch(l.Href)
-		if len(m) != 2 {
-			continue
-		}
-		d, err := time.Parse("2006-01-02", m[1])
-		if err != nil {
-			continue
-		}
-		if d.Before(cutoff) {
-			continue
-		}
-		recentLinks = append(recentLinks, l)
-	}
-
-	log.Printf("Found %d release note pages in the last 3 months\n", len(recentLinks))
-
-	var results []ReleaseNote
-	for _, l := range recentLinks {
-		var title, content string
-
-		// Navigate to the release-note page
-		err := chromedp.Run(ctx,
-			chromedp.Navigate(l.Href),
-			chromedp.WaitReady(`body`, chromedp.ByQuery),
-
-			// get the h1 title if present
-			chromedp.Evaluate(
-				`(function() {
-					const h1 = document.querySelector("h1");
-					return h1 ? h1.innerText : "";
-				})()`,
-				&title,
-			),
-
-			// get main content text
-			chromedp.Evaluate(
-				`(function() {
-					const main = document.querySelector("main");
-					if (main) return main.innerText;
-					const article = document.querySelector("article");
-					if (article) return article.innerText;
-					return document.body.innerText;
-				})()`,
-				&content,
-			),
-		)
-		if err != nil {
-			log.Printf("error scraping %s: %v", l.Href, err)
-			continue
-		}
-		// Parse date again from URL
-		m := reDate.FindStringSubmatch(l.Href)
-		var d time.Time
-		if len(m) == 2 {
-			if parsed, err := time.Parse("2006-01-02", m[1]); err == nil {
-				d = parsed
-			}
-		}
-
-		results = append(results, ReleaseNote{
-			Date:    d,
-			URL:     l.Href,
-			Title:   title,
-			Content: content,
-		})
-	}
-
-	// 4) Output as JSON (you can store it instead if you prefer)
-	out, err := json.MarshalIndent(results, "", "  ")
-	if err != nil {
-		log.Fatalf("failed to marshal results: %v", err)
-	}
-	return string(out)
-}
-
 func readAndConcatWebsiteFiles(root string) (string, error) {
 	var builder strings.Builder
 
@@ -759,11 +775,36 @@ func getMissingResources(d *schema.ResourceData, resources []TfResource) string 
 	//	"[{{ \"resource_type\": \"<resource_type>\", \"resource_id\": \"<resource_id>\", \"site name\": \"<site_name>\" }}]" +
 	//	" given resources: " + fmt.Sprintf("%v", resources)
 
-	question := "Fetch all the sites from the backend, use pagination 50, or fetch all pages. then output all the sites in the following json format: " +
-		"[{{ \"resource_type\": \"<resource_type>\", \"resource_id\": \"<resource_id>\", \"site name\": \"<site_name>\" }}]"
+	question := "Your task is to gather the full list of sites using the available MCP tool and compare it against the configuration provided in the user message." +
+		" Fetch all sites using the tool with a page size of 100." +
+		" After retrieving the remote sites, compare them to the sites defined in the provided configuration. " +
+		" Produce a JSON array containing only the differences between the two sets. " +
+		" Your output must contain only the following two sections, with no additional words, explanations, or text:\n" +
+		" add these resources to your configuration:\nresource \"incapsula_site_v3\" \"<site_name>\" {{ name = \"<site_name>\" }}" +
+		" run this import commands \nterraform import incapsula_site_v3.<site_name> <resource_id>" +
+		" Output only these blocks with no additional words, explanations, or text." +
+		" Only include sites that exist in one source but not the other." +
+		" If a tool call is required to obtain the data, call it." +
+		" this is the provided configuration: " + fmt.Sprintf("%v", resources)
 
-	answer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
-	return answer
+	sitesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
+
+	//question := "Your task is to gather the full list of rules using the available MCP tool and compare it against the configuration provided in the user message." +
+	//	" Fetch all the account rules using the tool with a page size of 100." +
+	//	" After retrieving the remote rules, compare them to the rules defined in the provided configuration. " +
+	//	" Produce a JSON array containing only the differences between the two sets. " +
+	//	" Your output must contain only the following two sections, with no additional words, explanations, or text. replace the all the spaces in the rule name with _:\n" +
+	//	" add these resources to your configuration:" +
+	//	" \nresource \"incapsula_incap_rule\" \"<rule_name>\" {{ name = \"<rule_name>\" site_id = \"<site_id>\" action = \"<action>\" filter = \"<filter>\" enabled = \"<enabled>\"  }}" +
+	//	" run this import commands \nterraform import incapsula_incap_rule.<rule_name> <resource_id>" +
+	//	" Output only these blocks with no additional words, explanations, or text." +
+	//	" Only include sites that exist in one source but not the other." +
+	//	" If a tool call is required to obtain the data, call it." +
+	//	" this is the provided configuration: " + fmt.Sprintf("%v", resources)
+	//
+	//rulesAnswer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
+
+	return sitesAnswer
 }
 
 func getAllResourcesTypeAndId(statePath string) []TfResource {
