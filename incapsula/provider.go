@@ -227,7 +227,7 @@ func runDiagnostics(d *schema.ResourceData, resources []TfResource, allResources
 	answer := ""
 	answer += getMissingResources(d, resources)
 	answer += getGeneralTFBestPractices(allResourcesFromFiles)
-	answer += getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles)
+	answer += getImpervaResourceReplaceSuggestions(allResourcesFromFiles)
 	answer += getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles)
 	htmlFile := getHtmlContent(d, answer)
 	link := saveHtmlToFile(d, htmlFile)
@@ -273,7 +273,7 @@ func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, allR
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles)
+		results <- getImpervaResourceReplaceSuggestions(allResourcesFromFiles)
 	}()
 	go func() {
 		defer wg.Done()
@@ -407,7 +407,7 @@ func getImpervaNewFeaturesSuggestions(d *schema.ResourceData, resources string) 
 	return answer
 }
 
-func getImpervaResourceReplaceSuggestions(d *schema.ResourceData, resources string) string {
+func getImpervaResourceReplaceSuggestions(resources string) string {
 	question := fmt.Sprintf(`You are an expert Terraform engineer specializing in provider-level correctness.
 Your task is to analyze Terraform files I provide and compare them against the current official provider documentation.
 
@@ -419,19 +419,35 @@ What You Must Do
 
 Focus on the following areas, arranged by priority:
 
-Deprecated resources
+	1. **Deprecated Resources**  
+	   - Detect any resources that are marked as deprecated in the official provider documentation, and suggest replacements based on the latest provider documentation. 
+	
+	2. **Deprecated Arguments or Attributes**  
+	   - Identify arguments or attributes within resources that are deprecated, and suggest replacements based on the latest provider documentation. 
+	
+	3. **Removed or Breaking-Change Arguments**  
+	   - Find any arguments that have been removed or changed in a way that breaks backward compatibility.
+	   - Ensure configurations are updated to match the latest provider requirements.
+	
+	4. **Required Attributes That Are Missing**  
+	   - Check for any required attributes that are missing from resource definitions.
+	   - Highlight missing attributes that can cause errors or misconfigurations.
+	
+	5. **Misconfigurations Differing from Current Provider Requirements**  
+	   - Spot any configuration patterns that do not align with the latest provider documentation.
+ 	   - Identify incorrect values, types, or usage.
+	
+	6. **Arguments That Should Be Nested or Relocated (based on provider updates)**  
+	   - Review the structure of resource arguments.
+ 	   - Suggest nesting or relocation according to updated provider schemas.
 
-Deprecated arguments or attributes
+	7. **Incorrect or Outdated Configuration Patterns**  
+	   - Identify any configuration patterns that are no longer recommended.
+	   - Call out legacy syntax, anti-patterns, or inefficient practices.
 
-Removed or breaking-change arguments
-
-Misconfigurations that differ from current provider requirements
-
-Arguments that should be nested or relocated (based on provider updates)
-
-Required attributes that are missing
-
-Any incorrect or outdated configuration patterns
+	8. **Resource Version**
+	   - Ensure the resource version matches the latest recommended in the documentation.
+	   - Suggest upgrading to newer resource versions if available.
 
 For each issue identified, provide:  
 - A clear description of the problem.  
@@ -468,8 +484,7 @@ Summary of Improvements
 
 - Bullet points summarizing key changes.
 
-Important Rules
-
+Important Rules:
 - Do not invent architecture not implied by the code.
 - Only modify what is necessary.
 - Keep improvements realistic and aligned with actual Terraform usage.
@@ -556,8 +571,7 @@ Summary of Improvements
 
 - Bullet points summarizing key changes.
 
-Important Rules
-
+Important Rules:
 - Do not invent architecture not implied by the code.
 - Only modify what is necessary.
 - Keep improvements realistic and aligned with actual Terraform usage.
