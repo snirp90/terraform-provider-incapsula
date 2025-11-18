@@ -9,9 +9,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/chromedp/chromedp"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -221,60 +224,190 @@ func getLLMSuggestions(d *schema.ResourceData) diag.Diagnostics {
 
 func runDiagnostics(d *schema.ResourceData, resources []TfResource, allResourcesFromFiles string) diag.Diagnostics {
 	var diags diag.Diagnostics
-	diags = getMissingResources(d, resources, diags)
-	diags = getGeneralTFBestPractices(allResourcesFromFiles, diags)
-	diags = getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles, diags)
-	diags = getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, diags)
+	answer := ""
+	//answer += getMissingResources(d, resources)
+	answer += getGeneralTFBestPractices(allResourcesFromFiles)
+	//answer += getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles)
+	//answer += getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles)
+	htmlFile := getHtmlContent(d, answer)
+	link := saveHtmlToFile(d, htmlFile)
+	answerWithImage := getAiAnswer(link)
+	diags = append(diags, diag.Diagnostic{
+		Severity: diag.Warning,
+		Summary:  "Best Practice Suggestion",
+		Detail:   answerWithImage,
+	})
+	print(htmlFile)
 	return diags
 }
 
-func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, allResourcesFromFiles string) diag.Diagnostics {
+func saveHtmlToFile(d *schema.ResourceData, content string) string {
+	executionDir := d.Get("execution_dir").(string)
+	if executionDir == "" {
+		executionDir, _ = os.Getwd()
+	}
+	filePath := filepath.Join(executionDir, "llm_suggestion.html")
+	err := ioutil.WriteFile(filePath, []byte(content), 0644)
+	if err != nil {
+		log.Printf("Failed to write HTML file: %v", err)
+		return "Failed to save HTML file"
+	}
+
+	// Return file URL
+	fileURL := "file://" + filePath
+	return fileURL
+}
+
+func runDiagnosticsParallel(d *schema.ResourceData, resources []TfResource, allResourcesFromFiles string) string {
 	var wg sync.WaitGroup
-	results := make(chan diag.Diagnostics, 4)
+	results := make(chan string, 4)
 
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		results <- getMissingResources(d, resources, nil)
+		results <- getMissingResources(d, resources)
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getGeneralTFBestPractices(allResourcesFromFiles, nil)
+		results <- getGeneralTFBestPractices(allResourcesFromFiles)
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles, nil)
+		results <- getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles)
 	}()
 	go func() {
 		defer wg.Done()
-		results <- getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles, nil)
+		results <- getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles)
 	}()
 
 	wg.Wait()
 	close(results)
 
-	var diags diag.Diagnostics
+	var answers []string
 	for r := range results {
-		diags = append(diags, r...)
+		answers = append(answers, r)
 	}
 
-	return diags
+	return strings.Join(answers, "\n")
 }
 
-func getImpervaNewFeaturesSuggestions(d *schema.ResourceData, resources string, diags diag.Diagnostics) diag.Diagnostics {
-	question := "you are slim shady, whats your name? out put should be a string only."
+func getHtmlContent(d *schema.ResourceData, finalAnswer string) string {
+	question := fmt.Sprintf(`
+You are a system that takes a final answer to the user question and turns that answer into a single, well-structured, visually organized HTML file.
 
-	answer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
-	answerWithImage := getAiAnswer(answer)
-	diags = append(diags, diag.Diagnostic{
-		Severity: diag.Warning,
-		Summary:  "New Resources Suggestion",
-		Detail:   answerWithImage,
-	})
-	return diags
+Overall behavior
+
+Transform that explanation into a self-contained HTML document that:
+
+Uses semantic structure (sections, headings, lists).
+
+Uses a simple but attractive layout (cards, columns, timelines, etc.).
+
+Includes inline CSS so it can be saved directly as index.html and opened in a browser.
+
+Output only the final HTML. Do not include any explanations, comments, or markdown.
+
+Content requirements
+
+Identify:
+
+Main idea / overview
+
+3–7 key points or components
+
+Any process, timeline, or hierarchy that can be visualized
+
+Summarize in clear, concise text (no huge paragraphs).
+
+All code snippets MUST be included in the recomendations.
+
+HTML requirements:
+
+Produce a complete HTML5 document:
+
+Use this structure (adapt as needed):
+
+<html>, <head>, <body> with:
+
+<meta charset="UTF-8">
+
+<title>: short title derived from the topic
+
+<style>: all CSS inline in the head (no external files)
+
+In <body>:
+
+A top header with:
+
+Main title
+
+Short subtitle/description
+
+A main content container with:
+
+Overview section
+
+Cards or columns for key points
+
+At least one “graphic” layout:
+
+E.g. a timeline, process flow, comparison table, or step boxes
+
+These can be built using HTML + CSS (no JS required).
+
+Visual style guidelines:
+
+Use a clean, modern layout with:
+
+A max-width centered container
+
+Some padding and spacing between sections
+
+Rounded corners and subtle box shadows for cards
+
+Use CSS Flexbox or CSS Grid for multi-column layouts where helpful.
+
+Use readable fonts (e.g. system fonts via font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;).
+
+Use a light background and slightly darker cards, with clear contrast between headings and body text.
+
+Use consistent heading sizes (e.g., h1 main title, h2 section titles, h3 card titles).
+
+Use icons or emojis where helpful (e.g. ✅, ⚙️, 📌, ⏱️) but not excessively.
+
+Accessibility:
+
+Ensure good color contrast.
+
+Structure headings in order (h1, then h2, etc.).
+
+Use lists (<ul>, <ol>) instead of manually formatted bullets.
+
+No JavaScript is required unless it’s absolutely necessary for layout; prefer pure HTML + CSS.
+
+Output format
+
+Return only the finished HTML document.
+
+Do not wrap it in code fences.
+
+Do not add any explanation or commentary.
+
+User request to base the HTML on: %s`, finalAnswer)
+
+	answer, _ := queryAgent(question)
+	return answer
 }
 
-func getImpervaResourceReplaceSuggestions(d *schema.ResourceData, resources string, diags diag.Diagnostics) diag.Diagnostics {
+func getImpervaNewFeaturesSuggestions(d *schema.ResourceData, resources string) string {
+	releaseNotes := getLastMonthsReleaseNotes()
+	question := "you are slim shady, whats your name? out put should be a string only." + releaseNotes
+
+	answer, _ := queryAgent(question)
+	return answer
+}
+
+func getImpervaResourceReplaceSuggestions(d *schema.ResourceData, resources string) string {
 	docs, _ := readAndConcatWebsiteFiles("website")
 	question := fmt.Sprintf(`
 You are an expert Terraform engineer specializing in provider-level correctness.
@@ -381,17 +514,11 @@ The current Terraform code is as follows:
 %s
 `, docs, resources)
 
-	answer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
-	answerWithImage := getAiAnswer(answer)
-	diags = append(diags, diag.Diagnostic{
-		Severity: diag.Warning,
-		Summary:  "Resource Replacement Suggestion",
-		Detail:   answerWithImage,
-	})
-	return diags
+	answer, _ := queryAgent(question)
+	return answer
 }
 
-func getGeneralTFBestPractices(resources string, diags diag.Diagnostics) diag.Diagnostics {
+func getGeneralTFBestPractices(resources string) string {
 	question := fmt.Sprintf(`You are an expert Terraform engineer and cloud architect.
 Your task is to analyze the Terraform code I provide and suggest improvements strictly following Terraform best practices specified in the following link: https://www.terraform-best-practices.com/
 
@@ -477,13 +604,7 @@ Important Rules
 The current Terraform resources are as follows: %s`, resources)
 
 	answer, _ := queryAgent(question)
-	answerWithImage := getAiAnswer(answer)
-	diags = append(diags, diag.Diagnostic{
-		Severity: diag.Warning,
-		Summary:  "Best Practice Suggestion",
-		Detail:   answerWithImage,
-	})
-	return diags
+	return answer
 }
 
 func getAiAnswer(answer string) string {
@@ -499,7 +620,135 @@ func getAiAnswer(answer string) string {
        /  |  \
       (   |   )
        \_/ \_/
-` + answer
+ you can find MY recomendations in the following link: ` + answer
+}
+
+const startURL = "https://docs-cybersec.thalesgroup.com/bundle/cloud-application-security/page/release-notes/2025-11-16.htm"
+
+type link struct {
+	Href string `json:"href"`
+	Text string `json:"text"`
+}
+
+type ReleaseNote struct {
+	Date    time.Time `json:"date"`
+	URL     string    `json:"url"`
+	Title   string    `json:"title"`
+	Content string    `json:"content"`
+}
+
+func getLastMonthsReleaseNotes() string {
+
+	const startURL = "https://docs-cybersec.thalesgroup.com/csh?context=latest_release_notes"
+
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(),
+		chromedp.Flag("headless", false),
+	)
+	defer cancelAlloc()
+
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	// 1) Open "latest_release_notes" and let it redirect to the latest release page
+	var rawLinksJSON string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(startURL),
+		chromedp.WaitReady(`body`, chromedp.ByQuery),
+		chromedp.Evaluate(
+			`JSON.stringify(
+				Array.from(document.querySelectorAll('a[href*="/release-notes/"]'))
+					.map(a => ({href: a.href, text: a.textContent.trim()}))
+			)`,
+			&rawLinksJSON,
+		),
+	); err != nil {
+		log.Fatalf("failed to load page or collect links: %v", err)
+	}
+
+	var links []link
+	if err := json.Unmarshal([]byte(rawLinksJSON), &links); err != nil {
+		log.Fatalf("failed to unmarshal links JSON: %v", err)
+	}
+
+	// 2) Filter links to last 3 months based on the date in the URL
+	reDate := regexp.MustCompile(`/release-notes/(\d{4}-\d{2}-\d{2})\.htm`)
+	cutoff := time.Now().AddDate(0, -3, 0)
+
+	var recentLinks []link
+	for _, l := range links {
+		m := reDate.FindStringSubmatch(l.Href)
+		if len(m) != 2 {
+			continue
+		}
+		d, err := time.Parse("2006-01-02", m[1])
+		if err != nil {
+			continue
+		}
+		if d.Before(cutoff) {
+			continue
+		}
+		recentLinks = append(recentLinks, l)
+	}
+
+	log.Printf("Found %d release note pages in the last 3 months\n", len(recentLinks))
+
+	var results []ReleaseNote
+	for _, l := range recentLinks {
+		var title, content string
+
+		// Navigate to the release-note page
+		err := chromedp.Run(ctx,
+			chromedp.Navigate(l.Href),
+			chromedp.WaitReady(`body`, chromedp.ByQuery),
+
+			// get the h1 title if present
+			chromedp.Evaluate(
+				`(function() {
+					const h1 = document.querySelector("h1");
+					return h1 ? h1.innerText : "";
+				})()`,
+				&title,
+			),
+
+			// get main content text
+			chromedp.Evaluate(
+				`(function() {
+					const main = document.querySelector("main");
+					if (main) return main.innerText;
+					const article = document.querySelector("article");
+					if (article) return article.innerText;
+					return document.body.innerText;
+				})()`,
+				&content,
+			),
+		)
+		if err != nil {
+			log.Printf("error scraping %s: %v", l.Href, err)
+			continue
+		}
+		// Parse date again from URL
+		m := reDate.FindStringSubmatch(l.Href)
+		var d time.Time
+		if len(m) == 2 {
+			if parsed, err := time.Parse("2006-01-02", m[1]); err == nil {
+				d = parsed
+			}
+		}
+
+		results = append(results, ReleaseNote{
+			Date:    d,
+			URL:     l.Href,
+			Title:   title,
+			Content: content,
+		})
+	}
+
+	// 4) Output as JSON (you can store it instead if you prefer)
+	out, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		log.Fatalf("failed to marshal results: %v", err)
+	}
+	return string(out)
 }
 
 func readAndConcatWebsiteFiles(root string) (string, error) {
@@ -525,7 +774,7 @@ func readAndConcatWebsiteFiles(root string) (string, error) {
 	return builder.String(), nil
 }
 
-func getMissingResources(d *schema.ResourceData, resources []TfResource, diags diag.Diagnostics) diag.Diagnostics {
+func getMissingResources(d *schema.ResourceData, resources []TfResource) string {
 	//question := "Based on the giving resources, which comes in the following structure [{{resource name resource id}}]" +
 	//	" fetch all the sites from the backend and compare them with the given sites resources. " +
 	//	" check which resources are missing and output the missing resources only" +
@@ -537,13 +786,7 @@ func getMissingResources(d *schema.ResourceData, resources []TfResource, diags d
 		"[{{ \"resource_type\": \"<resource_type>\", \"resource_id\": \"<resource_id>\", \"site name\": \"<site_name>\" }}]"
 
 	answer, _ := answerWithTools(question, d.Get("api_id").(string), d.Get("api_key").(string))
-	answerWithImage := getAiAnswer(answer)
-	diags = append(diags, diag.Diagnostic{
-		Severity: diag.Warning,
-		Summary:  "Missing Resource Suggestion",
-		Detail:   answerWithImage,
-	})
-	return diags
+	return answer
 }
 
 func getAllResourcesTypeAndId(statePath string) []TfResource {
