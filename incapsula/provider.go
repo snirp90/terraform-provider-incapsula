@@ -225,10 +225,10 @@ func getLLMSuggestions(d *schema.ResourceData) diag.Diagnostics {
 func runDiagnostics(d *schema.ResourceData, resources []TfResource, allResourcesFromFiles string) diag.Diagnostics {
 	var diags diag.Diagnostics
 	answer := ""
-	//answer += getMissingResources(d, resources)
+	answer += getMissingResources(d, resources)
 	answer += getGeneralTFBestPractices(allResourcesFromFiles)
-	//answer += getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles)
-	//answer += getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles)
+	answer += getImpervaResourceReplaceSuggestions(d, allResourcesFromFiles)
+	answer += getImpervaNewFeaturesSuggestions(d, allResourcesFromFiles)
 	htmlFile := getHtmlContent(d, answer)
 	link := saveHtmlToFile(d, htmlFile)
 	answerWithImage := getAiAnswer(link)
@@ -408,12 +408,16 @@ func getImpervaNewFeaturesSuggestions(d *schema.ResourceData, resources string) 
 }
 
 func getImpervaResourceReplaceSuggestions(d *schema.ResourceData, resources string) string {
-	docs, _ := readAndConcatWebsiteFiles("website")
-	question := fmt.Sprintf(`
-You are an expert Terraform engineer specializing in provider-level correctness.
+	question := fmt.Sprintf(`You are an expert Terraform engineer specializing in provider-level correctness.
 Your task is to analyze Terraform files I provide and compare them against the current official provider documentation.
 
-Your goal is to identify:
+When I give you Terraform files, follow all instructions below:
+
+What You Must Do
+1. Identify Issues
+2. Provide Exact Replacement Snippets
+
+Focus on the following areas, arranged by priority:
 
 Deprecated resources
 
@@ -429,91 +433,50 @@ Required attributes that are missing
 
 Any incorrect or outdated configuration patterns
 
-You must then propose specific fixes, including exact Terraform snippets that replace the existing ones.
+For each issue identified, provide:  
+- A clear description of the problem.  
+- The original Terraform snippet.  
+- An improved Terraform snippet (ready to paste).  
+- A brief explanation of why the improvement is necessary and how it aligns with best practices.
 
-What You Must Do
-1. Use Current Provider Documentation
+Important Instructions:
+- Keep context and variable names unless renaming is part of the improvement, and don't suggest names that already exists'
+- Combine multiple improvements into one clean replacement snippet.
+- Ensure the replacement is syntactically correct.
+- Never output partial fragments—always provide complete blocks.
 
-For every Terraform block I provide, you must mentally check against the latest relevant documentation for its provider (AWS, Azure, GCP, Cloudflare, etc.).
+3. Output Format (Must Follow Exactly)
 
-You must identify:
+For every issue:
 
-Deprecated resources
-
-Deprecated or renamed fields
-
-Missing required fields
-
-Incorrect block structure
-
-Fields that have moved to new blocks
-
-Arguments that have changed behavior or constraints
-
-Fields that require new nested blocks due to provider updates
-
-2. For Every Issue Found, Output the Following
-A. Issue title (short)
-B. Original snippet (copied exactly):
-<original>
-
-C. Improved snippet (full replacement, ready to paste):
-<improved>
-
-D. Explanation
-
-Explain:
-
-Why the original is deprecated or incorrect
-
-What provider documentation changed
-
-Why the new snippet is correct
-
-All fixes must be fully syntactically valid and immediately usable.
-
-3. Output Format (strict)
-Issue <number> — <short name>
+Issue <number> — <short title>
 
 Original snippet:
 
 <original>
 
-
 Improved snippet:
 
 <improved>
 
-
 Explanation:
-<why this fixes the deprecated or misconfigured resource>
+<clear explanation>
 
-After all issues:
+After analyzing all issues:
 
-Summary of Provider-Related Fixes
+Summary of Improvements
 
-Bullet list of top deprecations and misconfigurations fixed.
+- Bullet points summarizing key changes.
 
 Important Rules
 
-Always prefer the most recent stable Terraform provider syntax.
+- Do not invent architecture not implied by the code.
+- Only modify what is necessary.
+- Keep improvements realistic and aligned with actual Terraform usage.
+- If something looks dangerous or costly, call it out clearly.
+- If the provided Terraform is already optimal, say so and explain why.
 
-Never invent arguments that do not exist.
-
-If a resource has a new required field, include it.
-
-If a resource is fully deprecated, propose the correct replacement resource type.
-
-If multiple fixes touch the same block, provide one consolidated improved snippet.
-
-If no deprecated or incorrect usages exist, explicitly confirm compliance with the latest provider docs.
-
-The Imperva provider docs are: %s
-
-The current Terraform code is as follows:
-%s
-`, docs, resources)
-
+The current Terraform resources are as follows: %s`, resources)
 	answer, _ := queryAgent(question)
 	return answer
 }
