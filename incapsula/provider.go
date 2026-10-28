@@ -93,7 +93,8 @@ func Provider() *schema.Provider {
 		DataSourcesMap: map[string]*schema.Resource{
 			"incapsula_role_abilities":      dataSourceRoleAbilities(),
 			"incapsula_data_center":         dataSourceDataCenter(),
-			"incapsula_account_data":        dataSourceAccount(),
+			"incapsula_account_data":        dataSourceAccountData(),
+			"incapsula_account":             dataSourceAccount(),
 			"incapsula_client_apps_data":    dataSourceClientApps(),
 			"incapsula_account_permissions": dataSourceAccountPermissions(),
 			"incapsula_account_roles":       dataSourceAccountRoles(),
@@ -150,6 +151,7 @@ func Provider() *schema.Provider {
 			"incapsula_siem_splunk_connection":                                 resourceSiemSplunkConnection(),
 			"incapsula_siem_sftp_connection":                                   resourceSiemSftpConnection(),
 			"incapsula_siem_log_configuration":                                 resourceSiemLogConfiguration(),
+			"incapsula_siem_generic_http_connection":                           resourceSiemGenericHttpConnection(),
 			"incapsula_waiting_room":                                           resourceWaitingRoom(),
 			"incapsula_abp_websites":                                           resourceAbpWebsites(),
 			"incapsula_delivery_rules_configuration":                           resourceDeliveryRulesConfiguration(),
@@ -157,6 +159,9 @@ func Provider() *schema.Provider {
 			"incapsula_site_cache_configuration":                               resourceSiteCacheConfiguration(),
 			"incapsula_short_renewal_cycle":                                    resourceShortRenewalCycle(),
 			"incapsula_api_client":                                             resourceApiClient(),
+			"incapsula_ai_application_security_application":                    resourceAiApplicationSecurityApplication(),
+			"incapsula_ai_application_security_policy":                         resourceAiApplicationSecurityPolicy(),
+			"incapsula_ai_application_security_api_key":                        resourceAiApplicationSecurityApiKey(),
 		},
 	}
 
